@@ -1,0 +1,2 @@
+python-binance==0.6.7
+python-twitter==3.4.1
