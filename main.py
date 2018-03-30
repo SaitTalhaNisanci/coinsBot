@@ -21,8 +21,10 @@ class binance(object):
     current_index = 0
     vol_change_perc_threshold = 3
     price_change_perc_threshold = 4
+    volume_threshold = 500
     give_stats = False
     periods_in_seconds = [30, 60, 90]
+    sent_notifications = {}
     previous_value_index = []
     wait_interval_in_seconds = min(periods_in_seconds) / 3
     alarm_check_period_secs = 10
@@ -45,9 +47,17 @@ class binance(object):
             title = user + ' ' + created_at
             self.notify(title, text)
 
-    def give_statistics(self):
+    def give_statistics(self,*args):
+        filters = []
+        if len(args) != 0:
+            for arg in args:
+                if len(arg) > 0:
+                    filters.append(arg)
+        else:
+            filters.append('BTC')
+        print(filters)
         while binance.give_stats:
-            binance_client.update_products()
+            binance_client.update_products(filters)
             time.sleep(self.wait_interval_in_seconds)
 
     def get_volume(self, symbol, lower, upper):
@@ -117,8 +127,14 @@ class binance(object):
         if is_reached:
             text = symbol + " price reached to target : " + str(price)
             self.notify(symbol, text)
+    def does_exist_otherwise_add(self,cur):
+        if (cur[0],cur[1]) in self.sent_notifications:
+            return True
+        else:
+            self.sent_notifications[(cur[0],cur[1])] = True
+            return False
 
-    def update_products(self):
+    def update_products(self,filters):
         def get_history_indexes():
             history_indexes = []
             for index in self.previous_value_index:
@@ -137,6 +153,12 @@ class binance(object):
             symbol = product['symbol']
             cur_price = float(product['close'])
             cur_volume = float(product['tradedMoney'])
+
+            if not any(filter in symbol for filter in filters):
+                continue
+
+            if cur_volume < self.volume_threshold:
+                continue
             if symbol != "":
                 if symbol not in self.lastPrices:
                     self.lastPrices[symbol] = [0] * self.array_size
@@ -145,6 +167,7 @@ class binance(object):
 
                 for i, index in enumerate(history_indexes):
                     perc_change = 0
+                    print(self.lastPrices[symbol][index],self.lastVolumes[symbol][index],symbol,cur_price,cur_volume)
                     if self.lastPrices[symbol][index] != 0:
                         perc_change = (cur_price - self.lastPrices[symbol][index]) / self.lastPrices[symbol][
                             index] * 100
@@ -170,11 +193,13 @@ class binance(object):
                 from_beg = cur_price_percentage_changes[i][k]
                 from_end = cur_price_percentage_changes[i][len(cur_price_percentage_changes[i]) - 1 - k]
                 if from_beg[1] >= self.price_change_perc_threshold:
-                    text = "price percentage change: " + str(from_beg[0]) + " : " + str(from_beg[1])
-                    self.notify(from_beg[0], text)
+                    if not self.does_exist_otherwise_add(from_beg):
+                        text = "price percentage change: " + str(from_beg[0]) + " : " + str(from_beg[1])
+                        self.notify(from_beg[0], text)
                 if from_end[1] <= -1 * self.price_change_perc_threshold:
-                    text = "price percentage change: " + str(from_end[0]) + " : " + str(from_end[1])
-                    self.notify(from_end[0], text)
+                    if not self.does_exist_otherwise_add(from_end):
+                        text = "price percentage change: " + str(from_end[0]) + " : " + str(from_end[1])
+                        self.notify(from_end[0], text)
                 print("symbol: ", from_beg[0], " max positive price change ", from_beg[1], "% --- ", "symbol: ",
                       from_end[0], " max negative price change ", from_end[1])
             print()
@@ -184,11 +209,13 @@ class binance(object):
                 cur = cur_volume_percentage_changes[i][k]
                 from_end = cur_volume_percentage_changes[i][len(cur_price_percentage_changes[i]) - 1 - k]
                 if cur[1] >= self.vol_change_perc_threshold:
-                    text = "price percentage change: " + str(cur[0]) + " : " + str(cur[1])
-                    self.notify(cur[0], text)
+                    if not self.does_exist_otherwise_add(cur):
+                        text = "volume percentage change: " + str(cur[0]) + " : " + str(cur[1])
+                        self.notify(cur[0], text)
                 if from_end[1] <= -1 * self.vol_change_perc_threshold:
-                    text = "price percentage change: " + str(from_end[0]) + " : " + str(from_end[1])
-                    self.notify(from_end[0], text)
+                    if not self.does_exist_otherwise_add(from_end):
+                        text = "volume percentage change: " + str(from_end[0]) + " : " + str(from_end[1])
+                        self.notify(from_end[0], text)
 
                 print("symbol: ", cur[0], " maximum positive volume change ", cur[1], "% --- ", "symbol: ", from_end[0],
                       " max negative volume change ", from_end[1])
@@ -202,7 +229,7 @@ class binance(object):
 
 def get_user_input():
     print("options:")
-    print('1 to get top 3 volume and price changes of coins')
+    print('1 to get top 3 volume and price changes of coins; 1 BTC')
     print('2 to get volume in a range of a symbol, 2 TRXBTC 0.00000520 0.00000560')
     print('3 to get trade history of a symbol, 3 TRXBTC')
     print('4 to stop getting statistics 4')
@@ -210,6 +237,8 @@ def get_user_input():
     user_input = input()
     return user_input.split(' ')
 
+def update_products(*args):
+    binance_client.give_statistics(*args)
 
 def set_notification_for_symbol(symbol, target_price):
     binance_client.set_notification_for_symbol(symbol, target_price)
@@ -239,7 +268,7 @@ if __name__ == '__main__':
             if char[0] == '1':
                 if not binance.give_stats:
                     binance.give_stats = True
-                    thread = Thread(target=binance_client.give_statistics)
+                    thread = Thread(target=update_products,args=(char[1:]))
                     thread.start()
                     # pool.apply_async(binance_client.give_statistics, [])
             elif char[0] == '2':
