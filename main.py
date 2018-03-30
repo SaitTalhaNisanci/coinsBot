@@ -3,11 +3,14 @@ import time
 import math
 import operator
 import os
+import logging
 from multiprocessing import Pool
 import twitter
 from threading import Thread
 from twitter_api_constants import *
 
+
+BTC_TO_SATOSHI = 1e8
 
 class binance(object):
     display_number_amount = 3
@@ -18,6 +21,7 @@ class binance(object):
                               access_token_secret=ACCESS_TOKEN_SECRET)
     lastPrices = {}
     lastVolumes = {}
+    cur_alarms = {}
     current_index = 0
     vol_change_perc_threshold = 3
     price_change_perc_threshold = 4
@@ -27,7 +31,7 @@ class binance(object):
     sent_notifications = {}
     previous_value_index = []
     wait_interval_in_seconds = min(periods_in_seconds) / 3
-    alarm_check_period_secs = 10
+    alarm_check_period_secs = 3
     for value in periods_in_seconds:
         previous_value_index.append(value / wait_interval_in_seconds)
     array_size = math.ceil(max(periods_in_seconds) / wait_interval_in_seconds)
@@ -55,7 +59,6 @@ class binance(object):
                     filters.append(arg)
         else:
             filters.append('BTC')
-        print(filters)
         while binance.give_stats:
             binance_client.update_products(filters)
             time.sleep(self.wait_interval_in_seconds)
@@ -63,6 +66,11 @@ class binance(object):
     def get_volume(self, symbol, lower, upper):
         lower = float(lower)
         upper = float(upper)
+        if 'USDT' not in symbol:
+            lower = lower/BTC_TO_SATOSHI
+            upper = upper/BTC_TO_SATOSHI
+
+
         base_coin = 'BTC'
         if symbol[-3:] == 'ETH':
             base_coin = 'ETH'
@@ -70,6 +78,8 @@ class binance(object):
             base_coin = 'BNB'
         try:
             bids = self.client.get_order_book(symbol=symbol, limit=1000)['bids']
+            asks = self.client.get_order_book(symbol=symbol, limit=1000)['asks']
+            bids = bids + asks
         except BinanceAPIException as err:
             print(err.message)
             print("symbol is not found, ", symbol)
@@ -97,6 +107,11 @@ class binance(object):
 
     def set_notification_for_symbol(self, symbol, target_price):
         target_price = float(target_price)
+        if (symbol,target_price) in self.cur_alarms:
+            return
+        self.cur_alarms[(symbol,target_price)] = True
+        if 'USDT' not in symbol:
+            target_price = target_price / BTC_TO_SATOSHI
         is_reached = False
         is_sell_target = None
         price = 0
@@ -125,6 +140,7 @@ class binance(object):
             if not is_reached:
                 time.sleep(self.alarm_check_period_secs)
         if is_reached:
+            del self.cur_alarms[(symbol,target_price)]
             text = symbol + " price reached to target : " + str(price)
             self.notify(symbol, text)
     def does_exist_otherwise_add(self,cur):
@@ -133,7 +149,9 @@ class binance(object):
         else:
             self.sent_notifications[(cur[0],cur[1])] = True
             return False
-
+    def display_current_alarms(self):
+        for symbol,target_price in self.cur_alarms.keys():
+            print(symbol,target_price)
     def update_products(self,filters):
         def get_history_indexes():
             history_indexes = []
@@ -167,7 +185,7 @@ class binance(object):
 
                 for i, index in enumerate(history_indexes):
                     perc_change = 0
-                    print(self.lastPrices[symbol][index],self.lastVolumes[symbol][index],symbol,cur_price,cur_volume)
+                    #print(self.lastPrices[symbol][index],self.lastVolumes[symbol][index],symbol,cur_price,cur_volume)
                     if self.lastPrices[symbol][index] != 0:
                         perc_change = (cur_price - self.lastPrices[symbol][index]) / self.lastPrices[symbol][
                             index] * 100
@@ -234,6 +252,7 @@ def get_user_input():
     print('3 to get trade history of a symbol, 3 TRXBTC')
     print('4 to stop getting statistics 4')
     print('5 to set an alarm for a symbol, 5 TRXBTC 0.00000520')
+    print('6 to get alarms, 6')
     user_input = input()
     return user_input.split(' ')
 
@@ -247,6 +266,8 @@ def set_notification_for_symbol(symbol, target_price):
 USERS = ['@twitter',
          '@twitterapi',
          '@support']
+
+
 ACCOUNT_IDS = [
     '2170600542',  # me
     '902926941413453824',  # cz_binance
@@ -283,7 +304,8 @@ if __name__ == '__main__':
                 if len(char) == 3:
                     thread = Thread(target=set_notification_for_symbol, args=(char[1], char[2]))
                     thread.start()
-                    # pool.apply_async(set_notification_for_symbol, (char[1],char[2]))
+            elif char[0] == '6':
+                binance_client.display_current_alarms()
         except BinanceAPIException:
             print("got binance API exception")
         except BinanceRequestException:
@@ -291,5 +313,3 @@ if __name__ == '__main__':
         except Exception as message:
             print("got an exception")
             print(message)
-
-            # notify("heisenberg","this is notifying you")
