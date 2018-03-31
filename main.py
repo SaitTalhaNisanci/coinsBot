@@ -117,18 +117,19 @@ class binance(object):
         lower = float(lower)
         upper = float(upper)
         # Convert to BTC if not USDT
-        if 'USDT' not in symbol:
+        #if 'USDT' not in symbol:
+        #    lower = lower / BTC_TO_SATOSHI
+        #    upper = upper / BTC_TO_SATOSHI
+        base_coin = symbol[-3:]
+
+        if base_coin == 'BTC':
             lower = lower / BTC_TO_SATOSHI
             upper = upper / BTC_TO_SATOSHI
 
-        base_coin = 'BTC'
-        if symbol[-3:] == 'ETH':
-            base_coin = 'ETH'
-        elif symbol[-3:] == 'BNB':
-            base_coin = 'BNB'
         try:
-            bids = self.client.get_order_book(symbol=symbol, limit=1000)['bids']
-            asks = self.client.get_order_book(symbol=symbol, limit=1000)['asks']
+            depth = self.client.get_order_book(symbol=symbol, limit=1000)
+            bids = depth['bids']
+            asks = depth['asks']
             bids = bids + asks
         except BinanceAPIException as err:
             print(err.message)
@@ -140,7 +141,7 @@ class binance(object):
             amount = float(amount)
             if price > lower and price < upper:
                 total_amount += price * amount
-        print('total amount of ', symbol[:-3], ' ,' in ',', base_coin, 'between', lower, '-', upper, ' : ',
+        print('total amount of ', symbol[:-3], ' in ', base_coin, 'between', lower, '-', upper, ' : ',
               total_amount)
 
     def get_trade_history(self, symbol):
