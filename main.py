@@ -48,7 +48,7 @@ class binance(object):
     give_stats = False
     # these values are for bases of change calculations, for example if x,y,z are written then coins will be compared
     # to their x y z seconds ago prices
-    periods_in_seconds = [30, 60, 90]
+    periods_in_seconds = [10, 30, 60, 90]
     # this is to filter out the same notifications, this map stores pairs of (symbol,changePercentage)
     # TODO:: we should make this with an id, currently if there is the same percentage change, which is very unlikely,
     # TODO:: it will not be shown
@@ -58,7 +58,7 @@ class binance(object):
     previous_value_index = []
     # this is how often we send a request to binance server. Note that the smaller this is the faster we get information
     # but the more CPU power as well
-    wait_interval_in_seconds = min(periods_in_seconds) / 3
+    wait_interval_in_seconds = min(periods_in_seconds) / 5
     # this is how often we send a request to binance server to see if a target price is reached for a coin
     alarm_check_period_secs = 3
 
@@ -71,6 +71,13 @@ class binance(object):
         previous_value_index.append(value / wait_interval_in_seconds)
     # this is how many values we store for every coin
     array_size = math.ceil(max(periods_in_seconds) / wait_interval_in_seconds)
+
+    consistent_change_history_amount = min(20,
+                                           array_size)  # take the minimum since we cant look back more than array size
+
+    consistent_change_percentage_threshold = 80 / 100
+
+    consistent_change_amount_threshold = consistent_change_history_amount * consistent_change_percentage_threshold
 
     def set_notification_for_twitter_account(self, account):
         """
@@ -249,6 +256,61 @@ class binance(object):
         for symbol, target_price in self.cur_alarms.keys():
             print(symbol, target_price)
 
+    def check_consistent_change(self, symbol):
+        consistent_price_change = self.check_for_consistent_increase_or_decrease(self.lastPrices[symbol],
+                                                                                 self.current_index)
+        if consistent_price_change == 1:
+            text = "consistent price increase in " + symbol + " for " + str(
+                self.consistent_change_history_amount * self.wait_interval_in_seconds) + " seconds"
+            self.notify(symbol, text)
+        elif consistent_price_change == 2:
+            text = "consistent price decrease in " + symbol + " for " + str(
+                self.consistent_change_history_amount * self.wait_interval_in_seconds) + " seconds"
+            self.notify(symbol, text)
+
+        consistent_vol_change = self.check_for_consistent_increase_or_decrease(self.lastVolumes[symbol],
+                                                                               self.current_index)
+        if consistent_vol_change == 1:
+            text = "consistent volume increase in " + symbol + " for " + str(
+                self.consistent_change_history_amount * self.wait_interval_in_seconds) + " seconds"
+            self.notify(symbol, text)
+        elif consistent_vol_change == 2:
+            text = "consistent volume decrease in " + symbol + " for " + str(
+                self.consistent_change_history_amount * self.wait_interval_in_seconds) + " seconds"
+            self.notify(symbol, text)
+
+    def check_for_consistent_increase_or_decrease(self, values, cur_index):
+        """
+        Check if there was a consistent increase or decrease in the history
+        :param values: values to be checked
+        :param cur_index: current index of values
+        :return: 0 if there is no consistent change, 1 if there is a consistent increase, 2 if consistent decrease
+        """
+
+        increase_number = 0
+        decrease_number = 0
+        counter = self.consistent_change_history_amount
+        while counter:
+            counter -= 1
+            prev_index = cur_index - 1
+            if prev_index < 0:
+                prev_index += len(values)
+            # not initialized yet.
+            if values[prev_index] == 0:
+                return 0
+            if values[prev_index] < values[cur_index]:
+                increase_number += 1
+            elif values[prev_index] > values[cur_index]:
+                decrease_number += 1
+            cur_index -= 1
+            if cur_index < 0:
+                cur_index += len(values)
+        if increase_number > self.consistent_change_amount_threshold:
+            return 1
+        if decrease_number > self.consistent_change_amount_threshold:
+            return 2
+        return 0
+
     def update_products(self, filters):
         """
         this is the internal method for getting statistics, this sends a request to binance server and updates the
@@ -272,10 +334,8 @@ class binance(object):
 
         # get products information from the server
         products = self.client.get_products()['data']
-        # since there are 3 periods for now make a list of 3 arrays and store the changes
-        # TODO:: make these generic
-        cur_volume_percentage_changes = [[], [], []]
-        cur_price_percentage_changes = [[], [], []]
+        cur_volume_percentage_changes = [[] for _ in range(0, len(self.periods_in_seconds))]
+        cur_price_percentage_changes = [[] for _ in range(0, len(self.periods_in_seconds))]
 
         history_indexes = get_history_indexes()
         for product in products:
@@ -293,6 +353,8 @@ class binance(object):
                     self.lastPrices[symbol] = [0] * self.array_size
                 if symbol not in self.lastVolumes:
                     self.lastVolumes[symbol] = [0] * self.array_size
+
+                self.check_consistent_change(symbol)
 
                 for index, history_index in enumerate(history_indexes):
                     perc_change = 0
