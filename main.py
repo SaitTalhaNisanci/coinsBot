@@ -61,6 +61,11 @@ class binance(object):
     wait_interval_in_seconds = min(periods_in_seconds) / 3
     # this is how often we send a request to binance server to see if a target price is reached for a coin
     alarm_check_period_secs = 3
+
+    volume_difference_percentage_threshold = 250
+
+    volume_difference_interval_time = 5
+    should_notify_for_sell_buy_diff = False
     # calculate the previous indexes as a helper
     for value in periods_in_seconds:
         previous_value_index.append(value / wait_interval_in_seconds)
@@ -116,10 +121,6 @@ class binance(object):
         """
         lower = float(lower)
         upper = float(upper)
-        # Convert to BTC if not USDT
-        #if 'USDT' not in symbol:
-        #    lower = lower / BTC_TO_SATOSHI
-        #    upper = upper / BTC_TO_SATOSHI
         base_coin = symbol[-3:]
 
         if base_coin == 'BTC':
@@ -204,6 +205,34 @@ class binance(object):
             del self.cur_alarms[(symbol, target_price)]
             text = symbol + " price reached to target : " + str(price)
             self.notify(symbol, text)
+
+    def set_notification_for_sell_buy_difference(self):
+        while self.should_notify_for_sell_buy_diff:
+            products = self.client.get_products()['data']
+            for product in products:
+                symbol = product['symbol']
+                if 'BTC' not in symbol:
+                    continue
+                if float(product['tradedMoney']) < self.volume_threshold:
+                    continue
+                depth = self.client.get_order_book(symbol=symbol, limit=50)
+                bids = depth['bids']
+                asks = depth['asks']
+                bids_total_volume = 0
+                asks_total_volume = 0
+                for _, amount, _ in bids:
+                    bids_total_volume += float(amount)
+                for _, amount, _ in asks:
+                    asks_total_volume += float(amount)
+                dif1 = (bids_total_volume - asks_total_volume) / asks_total_volume * 100
+                dif2 = (asks_total_volume - bids_total_volume) / bids_total_volume * 100
+                if dif1 > self.volume_difference_percentage_threshold:
+                    text = "volume difference for buy in " + symbol + " : " + str(dif1)
+                    self.notify(symbol, text)
+                if dif2 > self.volume_difference_percentage_threshold:
+                    text = "volume difference for sell in " + symbol + " : " + str(dif2)
+                    self.notify(symbol, text)
+            time.sleep(self.volume_difference_interval_time)
 
     def does_exist_otherwise_add(self, cur):
         if (cur[0], cur[1]) in self.sent_notifications:
@@ -341,6 +370,8 @@ def get_user_input():
     print('4 to stop getting statistics 4')
     print('5 to set an alarm for a symbol, 5 TRXBTC 0.00000520')
     print('6 to get alarms, 6')
+    print('7 to set notifications for sell buy volume difference, 7')
+    print('8 to stop sell buy volume difference, 8')
     user_input = input()
     return user_input.split(' ')
 
@@ -394,6 +425,13 @@ if __name__ == '__main__':
                     thread.start()
             elif char[0] == '6':
                 binance_client.display_current_alarms()
+            elif char[0] == '7':
+                if not binance.should_notify_for_sell_buy_diff:
+                    binance.should_notify_for_sell_buy_diff = True
+                    thread = Thread(target=binance_client.set_notification_for_sell_buy_difference)
+                    thread.start()
+            elif char[0] == '8':
+                binance.should_notify_for_sell_buy_diff = False
         except BinanceAPIException:
             print("got binance API exception")
         except BinanceRequestException:
